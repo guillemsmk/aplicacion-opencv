@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Filtros de Webcam en Vivo</title>
+
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: system-ui, sans-serif; }
+
+    body {
+      background: #0d0d0f;
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 32px;
+    }
+
+    .app { width: 100%; max-width: 1200px; }
+    h1 { text-align: center; margin-bottom: 24px; font-size: 32px; }
+
+    .panels {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+
+    .panel {
+      background: #111;
+      padding: 16px;
+      border-radius: 16px;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+    }
+
+    .panel-title { opacity: 0.7; margin-bottom: 8px; }
+    video, canvas { width: 100%; background: black; border-radius: 12px; }
+
+    #controls {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+      margin-bottom: 16px;
+    }
+
+    button.filter-btn {
+      background: #1f242a;
+      color: #fff;
+      border: none;
+      padding: 8px 14px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: 0.2s;
+    }
+    button.filter-btn.active { background: #2563eb; }
+
+    #sliders { max-width: 600px; margin: 0 auto; }
+
+    .slider-box {
+      margin-bottom: 14px;
+      background: #1a1a1a;
+      padding: 12px 16px;
+      border-radius: 12px;
+      border: 1px solid #333;
+    }
+
+    .slider-box label { display: block; margin-bottom: 6px; font-size: 14px; opacity: 0.8; }
+    .slider-box input[type=range] { width: 100%; }
+
+    #status { text-align: center; margin-top: 10px; opacity: 0.7; }
+
+    @media (max-width: 780px) {
+      .panels { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="app">
+  <h1>🎥 Filtros de Webcam en Vivo</h1>
+
+  <div class="panels">
+    <div class="panel">
+      <div class="panel-title">Original</div>
+      <video id="video" autoplay playsinline muted style="display:none;"></video>
+      <canvas id="originalCanvas"></canvas>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Filtro aplicado</div>
+      <canvas id="filteredCanvas"></canvas>
+    </div>
+  </div>
+
+  <!-- BOTONES -->
+  <div id="controls">
+    <button class="filter-btn" data-filter="gray">Blanco y negro</button>
+    <button class="filter-btn" data-filter="mirror">Espejo</button>
+    <button class="filter-btn" data-filter="sketch">Sketch</button>
+    <button class="filter-btn" data-filter="blur">Blur</button>
+    <button class="filter-btn" data-filter="pixel">Pixel Art</button>
+  </div>
+
+  <!-- SLIDERS -->
+  <div id="sliders"></div>
+
+  <div id="status">Cargando OpenCV…</div>
+</div>
+
+<!-- OpenCV -->
+<script async src="https://docs.opencv.org/3.4/opencv.js"></script>
+
+<script>
+  const video = document.getElementById("video");
+  const originalCanvas = document.getElementById("originalCanvas");
+  const filteredCanvas = document.getElementById("filteredCanvas");
+  const slidersContainer = document.getElementById("sliders");
+  const statusEl = document.getElementById("status");
+
+  // Filtros activos + intensidades individuales
+  let activeFilters = [];
+  let filterIntensity = {
+    blur: 5,
+    pixel: 5,
+    sketch: 5,
+  };
+
+  // -------------------------------
+  // CREAR SLIDER DE FILTRO ACTIVO
+  // -------------------------------
+  function createSlider(filterName, label) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "slider-box";
+    wrapper.id = `slider-${filterName}`;
+
+    wrapper.innerHTML = `
+      <label>${label} - Intensidad</label>
+      <input type="range" min="1" max="10" value="${filterIntensity[filterName]}" />
+    `;
+
+    // actualizar valor
+    wrapper.querySelector("input").addEventListener("input", e => {
+      filterIntensity[filterName] = Number(e.target.value);
+    });
+
+    slidersContainer.appendChild(wrapper);
+  }
+
+  function removeSlider(filterName) {
+    const el = document.getElementById(`slider-${filterName}`);
+    if (el) el.remove();
+  }
+
+  // -------------------------
+  // BOTONES DE ACTIVAR FILTRO
+  // -------------------------
+  document.querySelectorAll(".filter-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const f = btn.dataset.filter;
+
+      if (activeFilters.includes(f)) {
+        activeFilters = activeFilters.filter(x => x !== f);
+        btn.classList.remove("active");
+
+        if (filterIntensity[f] !== undefined) removeSlider(f);
+
+      } else {
+        activeFilters.push(f);
+        btn.classList.add("active");
+
+        if (filterIntensity[f] !== undefined) {
+          if (!document.getElementById(`slider-${f}`)) {
+            const labels = {
+              blur: "Blur",
+              pixel: "Pixel Art",
+              sketch: "Sketch"
+            };
+            createSlider(f, labels[f]);
+          }
+        }
+      }
+    });
+  });
+
+  // ---------------------------------
+  // ACTIVAR WEBCAM
+  // ---------------------------------
+  async function startCamera() {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    video.srcObject = stream;
+    video.play();
+    statusEl.textContent = "Webcam lista ✔";
+  }
+
+  let src, dst, tmp;
+
+  function onOpenCvReady() {
+    statusEl.textContent = "OpenCV cargado ✔ Iniciando cámara…";
+    startCamera();
+    requestAnimationFrame(processFrame);
+  }
+
+  // ---------------------------------
+  // BUCLE PRINCIPAL
+  // ---------------------------------
+  function processFrame() {
+    if (video.readyState >= video.HAVE_ENOUGH_DATA) {
+      let w = video.videoWidth, h = video.videoHeight;
+
+      if (!src) {
+        originalCanvas.width = filteredCanvas.width = w;
+        originalCanvas.height = filteredCanvas.height = h;
+
+        src = new cv.Mat(h, w, cv.CV_8UC4);
+        dst = new cv.Mat(h, w, cv.CV_8UC4);
+        tmp = new cv.Mat(h, w, cv.CV_8UC1);
+      }
+
+      const ctx = originalCanvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, w, h);
+
+      let frame = cv.imread(originalCanvas);
+      frame.copyTo(src);
+      frame.delete();
+
+      let working = src.clone();
+
+      for (let f of activeFilters) {
+        applyFilter(working, dst, tmp, f);
+        dst.copyTo(working);
+      }
+
+      cv.imshow(filteredCanvas, working);
+      working.delete();
+    }
+
+    requestAnimationFrame(processFrame);
+  }
+
+  // ---------------------------------
+  // FUNCIONES DE FILTRO
+  // ---------------------------------
+  function applyFilter(src, dst, tmp, filter) {
+
+    switch (filter) {
+
+      case "gray":
+        cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY);
+        cv.cvtColor(dst, dst, cv.COLOR_GRAY2RGBA);
+        break;
+
+      case "mirror":
+        cv.flip(src, dst, 1);
+        break;
+
+      case "sketch": {
+        let intensity = filterIntensity["sketch"];
+        let low = intensity * 10;
+        let high = intensity * 20;
+
+        cv.cvtColor(src, tmp, cv.COLOR_RGBA2GRAY);
+        cv.GaussianBlur(tmp, tmp, new cv.Size(5, 5), 0);
+        cv.Canny(tmp, tmp, low, high);
+        cv.bitwise_not(tmp, tmp);
+        cv.cvtColor(tmp, dst, cv.COLOR_GRAY2RGBA);
+      }
+      break;
+
+      case "blur": {
+        let intensity = filterIntensity["blur"];
+        let k = intensity * 2 + 1;
+        cv.GaussianBlur(src, dst, new cv.Size(k, k), 0);
+      }
+      break;
+
+      case "pixel": {
+        let intensity = filterIntensity["pixel"];
+        let pixelSize = Math.max(2, Math.floor(intensity * 1.5));
+
+        let small = new cv.Mat();
+        cv.resize(src, small, new cv.Size(src.cols / pixelSize, src.rows / pixelSize), 0, 0, cv.INTER_NEAREST);
+        cv.resize(small, dst, new cv.Size(src.cols, src.rows), 0, 0, cv.INTER_NEAREST);
+        small.delete();
+      }
+      break;
+
+      default:
+        src.copyTo(dst);
+    }
+  }
+
+  window.Module = { onRuntimeInitialized: onOpenCvReady };
+</script>
+
+</body>
+</html>
