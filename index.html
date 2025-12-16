@@ -120,6 +120,50 @@
   const slidersContainer = document.getElementById("sliders");
   const statusEl = document.getElementById("status");
 
+  // ============================
+  // (NUEVO) MÉTRICAS / LOGGING
+  // ============================
+
+  // Contador de interacciones (dato extraído del usuario)
+  let widgetInteractions = 0;
+
+  // Para no spamear logs (si el usuario mueve el slider mucho)
+  let lastSentAtMs = 0;
+  const SEND_COOLDOWN_MS = 500;
+
+  // IMPORTANTE:
+  // - En Vercel: "/api/log" funciona perfecto
+  // - En Live Server (local): NO existe "/api/log"
+  //   => Solución: cuando estés en local, envía al endpoint de tu Vercel.
+  // Cambia TU_URL_DE_VERCEL por tu URL real cuando la tengas.
+  const LOG_ENDPOINT =
+    (location.hostname === "localhost" || location.hostname === "127.0.0.1")
+      ? "aplicacion-opencv-d5f0iq275-guillemsmks-projects.vercel.app/api/log"
+      : "/api/log";
+
+  function sendMetrics(eventType, extra = {}) {
+    const now = Date.now();
+    if (now - lastSentAtMs < SEND_COOLDOWN_MS) return;
+    lastSentAtMs = now;
+
+    fetch(LOG_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        eventType,
+        widgetInteractions,
+        timestamp: new Date().toISOString(),
+        userAgent: navigator.userAgent,
+        page: location.href,
+        ...extra
+      })
+    }).catch(() => {});
+  }
+
+  // ============================
+  // APP ORIGINAL
+  // ============================
+
   // Filtros activos + intensidades individuales
   let activeFilters = [];
   let filterIntensity = {
@@ -144,6 +188,10 @@
     // actualizar valor
     wrapper.querySelector("input").addEventListener("input", e => {
       filterIntensity[filterName] = Number(e.target.value);
+
+      // (NUEVO) registrar interacción de slider
+      widgetInteractions++;
+      sendMetrics("slider_change", { filterName, value: filterIntensity[filterName] });
     });
 
     slidersContainer.appendChild(wrapper);
@@ -159,6 +207,10 @@
   // -------------------------
   document.querySelectorAll(".filter-btn").forEach(btn => {
     btn.addEventListener("click", () => {
+      // (NUEVO) registrar interacción de botón
+      widgetInteractions++;
+      sendMetrics("filter_button_click", { filter: btn.dataset.filter });
+
       const f = btn.dataset.filter;
 
       if (activeFilters.includes(f)) {
@@ -193,12 +245,19 @@
     video.srcObject = stream;
     video.play();
     statusEl.textContent = "Webcam lista ✔";
+
+    // (NUEVO) log de "acceso listo": útil para probar que el profesor entró
+    sendMetrics("webcam_ready");
   }
 
   let src, dst, tmp;
 
   function onOpenCvReady() {
     statusEl.textContent = "OpenCV cargado ✔ Iniciando cámara…";
+
+    // (NUEVO) log de carga de página / inicio (por si el profe no toca nada)
+    sendMetrics("page_load");
+
     startCamera();
     requestAnimationFrame(processFrame);
   }
